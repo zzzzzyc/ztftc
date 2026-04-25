@@ -462,10 +462,18 @@ async function fetchFullDump() {
 function applyFilters(data) {
   const typeFilter = document.getElementById("filter-type").value;
   const search = document.getElementById("search").value.trim().toUpperCase();
+  const dMin = parseFloat(document.getElementById("filter-d-min").value);
+  const dMax = parseFloat(document.getElementById("filter-d-max").value);
+  const tMin = parseFloat(document.getElementById("filter-t-min").value);
+  const tMax = parseFloat(document.getElementById("filter-t-max").value);
 
   return data.filter((c) => {
     if (typeFilter && String(c.geocacheType) !== typeFilter) return false;
     if (search && !(c.code || "").toUpperCase().includes(search)) return false;
+    if (!Number.isNaN(dMin) && Number(c.difficulty) < dMin) return false;
+    if (!Number.isNaN(dMax) && Number(c.difficulty) > dMax) return false;
+    if (!Number.isNaN(tMin) && Number(c.terrain) < tMin) return false;
+    if (!Number.isNaN(tMax) && Number(c.terrain) > tMax) return false;
     if (typeof c.latitude !== "number" || typeof c.longitude !== "number") return false;
     return true;
   });
@@ -774,8 +782,12 @@ document.addEventListener("DOMContentLoaded", () => {
     setBasemap(e.target.value);
   });
 
-  // 类型筛选 / 搜索 → 仅重渲染
+  // 类型 / D/T / 搜索筛选 → 仅重渲染
   document.getElementById("filter-type").addEventListener("change", () => render(allCaches));
+  document.getElementById("filter-d-min").addEventListener("change", () => render(allCaches));
+  document.getElementById("filter-d-max").addEventListener("change", () => render(allCaches));
+  document.getElementById("filter-t-min").addEventListener("change", () => render(allCaches));
+  document.getElementById("filter-t-max").addEventListener("change", () => render(allCaches));
   document.getElementById("search").addEventListener("input", () => {
     if (allCaches.length) render(allCaches);
   });
