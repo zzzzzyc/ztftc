@@ -365,6 +365,12 @@
     min-width: 140px;
     outline: none;
   }
+  .md-select--compact {
+    min-width: 92px;
+    padding-left: 10px;
+    padding-right: 28px;
+    font-size: 12px;
+  }
   .md-select:hover, .md-input:hover { border-color: var(--md-on-surface); }
   .md-select:focus, .md-input:focus {
     border-color: var(--md-primary);
@@ -921,7 +927,7 @@
     </span>
 
     <span class="md-field">
-      <select id="filter-d-min" class="md-select" aria-label="D最小值" title="Difficulty 最小值">
+      <select id="filter-d-min" class="md-select md-select--compact" aria-label="D最小值" title="Difficulty 最小值">
         <option value="">D 最小</option>
         <option value="1">1.0</option>
         <option value="1.5">1.5</option>
@@ -936,7 +942,7 @@
     </span>
 
     <span class="md-field">
-      <select id="filter-d-max" class="md-select" aria-label="D最大值" title="Difficulty 最大值">
+      <select id="filter-d-max" class="md-select md-select--compact" aria-label="D最大值" title="Difficulty 最大值">
         <option value="">D 最大</option>
         <option value="1">1.0</option>
         <option value="1.5">1.5</option>
@@ -951,7 +957,7 @@
     </span>
 
     <span class="md-field">
-      <select id="filter-t-min" class="md-select" aria-label="T最小值" title="Terrain 最小值">
+      <select id="filter-t-min" class="md-select md-select--compact" aria-label="T最小值" title="Terrain 最小值">
         <option value="">T 最小</option>
         <option value="1">1.0</option>
         <option value="1.5">1.5</option>
@@ -966,7 +972,7 @@
     </span>
 
     <span class="md-field">
-      <select id="filter-t-max" class="md-select" aria-label="T最大值" title="Terrain 最大值">
+      <select id="filter-t-max" class="md-select md-select--compact" aria-label="T最大值" title="Terrain 最大值">
         <option value="">T 最大</option>
         <option value="1">1.0</option>
         <option value="1.5">1.5</option>
