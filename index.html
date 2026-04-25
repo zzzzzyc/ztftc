@@ -1,0 +1,987 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>TFTC Geocaching · 中国寻宝地图</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&family=Roboto+Mono:wght@500&display=swap" />
+<link rel="stylesheet" href="https://fonts.googleapis.com/icon?family=Material+Symbols+Outlined" />
+
+<script>
+  // 提前设置主题，避免 FOUC（必须在 <link> 之前）
+  (function () {
+    try {
+      var t = localStorage.getItem("tftc-theme");
+      if (!t) t = matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+      document.documentElement.dataset.theme = t;
+    } catch (e) {
+      document.documentElement.dataset.theme = "dark";
+    }
+  })();
+</script>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" />
+
+<style>
+  /* ======================================================
+   * Material Design 3 — Color Tokens
+   * ====================================================== */
+  :root, [data-theme="dark"] {
+    /* Primary (Teal/Cyan — 探索/发现感) */
+    --md-primary:                #80D8FF;
+    --md-on-primary:             #003547;
+    --md-primary-container:      #004D63;
+    --md-on-primary-container:   #BFE9FF;
+
+    /* Secondary (Sage — 自然/户外) */
+    --md-secondary:              #B5C9D2;
+    --md-on-secondary:           #1F333B;
+    --md-secondary-container:    #354A52;
+    --md-on-secondary-container: #D0E5EE;
+
+    /* Tertiary (Amber — 宝藏/FTF) */
+    --md-tertiary:               #F4BD64;
+    --md-on-tertiary:             #432C00;
+
+    /* Error */
+    --md-error:                  #FFB4AB;
+    --md-on-error:               #690005;
+    --md-error-container:        #93000A;
+
+    /* Surface elevation scale (dark: 越高越亮) */
+    --md-background:             #0F1417;
+    --md-on-background:          #DFE3E5;
+    --md-on-surface:             #DFE3E5;
+    --md-surface-variant:        #40484C;
+    --md-on-surface-variant:     #C0C8CC;
+    --md-surface-low:            #161A1D;
+    --md-surface:                #1A1E21;
+    --md-surface-high:           #232729;
+    --md-surface-highest:        #2D3133;
+
+    /* Outline */
+    --md-outline:                #8A9296;
+    --md-outline-variant:        #40484C;
+
+    /* App-specific */
+    --map-overlay-bg:            rgba(15, 20, 23, 0.7);
+    --map-overlay-tile-filter:   none;
+  }
+
+  /* Light theme overrides (M3 light: 越高越暗) */
+  [data-theme="light"] {
+    --md-primary:                #006686;
+    --md-on-primary:             #FFFFFF;
+    --md-primary-container:      #BFE9FF;
+    --md-on-primary-container:   #001F2A;
+
+    --md-secondary:              #4D616C;
+    --md-on-secondary:           #FFFFFF;
+    --md-secondary-container:    #D0E5EE;
+    --md-on-secondary-container: #08191F;
+
+    --md-tertiary:               #835400;
+    --md-on-tertiary:            #FFFFFF;
+
+    --md-error:                  #BA1A1A;
+    --md-on-error:               #FFFFFF;
+    --md-error-container:        #FFDAD6;
+
+    --md-background:             #F6FAFD;
+    --md-on-background:          #181C1F;
+    --md-on-surface:             #181C1F;
+    --md-surface-variant:        #DBE4E8;
+    --md-on-surface-variant:     #40484C;
+    --md-surface-low:            #F0F4F7;
+    --md-surface:                #E8EEF1;
+    --md-surface-high:           #E1E8EC;
+    --md-surface-highest:        #DAE2E6;
+
+    --md-outline:                #70787C;
+    --md-outline-variant:        #C0C8CC;
+
+    --map-overlay-bg:            rgba(246, 250, 253, 0.7);
+    --map-overlay-tile-filter:   none;
+  }
+
+    /* State layer opacities */
+    --state-hover:               0.08;
+    --state-focus:               0.12;
+    --state-pressed:             0.16;
+
+    /* Elevation shadows (Material 3) */
+    --elev-1: 0 1px 2px 0 rgba(0,0,0,0.30), 0 1px 3px 1px rgba(0,0,0,0.15);
+    --elev-2: 0 1px 2px 0 rgba(0,0,0,0.30), 0 2px 6px 2px rgba(0,0,0,0.15);
+    --elev-3: 0 1px 3px 0 rgba(0,0,0,0.30), 0 4px 8px 3px rgba(0,0,0,0.15);
+    --elev-4: 0 2px 3px 0 rgba(0,0,0,0.30), 0 6px 10px 4px rgba(0,0,0,0.15);
+    --elev-5: 0 4px 4px 0 rgba(0,0,0,0.30), 0 8px 12px 6px rgba(0,0,0,0.15);
+
+    /* Motion */
+    --motion-emphasized:    cubic-bezier(0.2, 0.0, 0, 1.0);
+    --motion-standard:      cubic-bezier(0.2, 0.0, 0, 1.0);
+    --motion-decelerated:   cubic-bezier(0.0, 0.0, 0, 1.0);
+    --duration-short:       150ms;
+    --duration-medium:      250ms;
+    --duration-long:        400ms;
+
+    /* Shape */
+    --shape-xs:  4px;
+    --shape-sm:  8px;
+    --shape-md:  12px;
+    --shape-lg:  16px;
+    --shape-xl:  28px;
+    --shape-full: 9999px;
+  }
+
+  /* ======================================================
+   * Reset & Base
+   * ====================================================== */
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; overflow: hidden; }
+  body {
+    font-family: "Roboto", system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: var(--md-background);
+    color: var(--md-on-background);
+    display: flex;
+    flex-direction: column;
+    -webkit-font-smoothing: antialiased;
+    line-height: 1.4;
+  }
+
+  /* Material 3 typography scale */
+  .md-headline-small  { font-size: 24px; line-height: 32px; font-weight: 400; letter-spacing: 0; }
+  .md-title-large     { font-size: 22px; line-height: 28px; font-weight: 400; }
+  .md-title-medium    { font-size: 16px; line-height: 24px; font-weight: 500; letter-spacing: 0.15px; }
+  .md-title-small     { font-size: 14px; line-height: 20px; font-weight: 500; letter-spacing: 0.1px; }
+  .md-body-large      { font-size: 16px; line-height: 24px; font-weight: 400; letter-spacing: 0.5px; }
+  .md-body-medium     { font-size: 14px; line-height: 20px; font-weight: 400; letter-spacing: 0.25px; }
+  .md-body-small      { font-size: 12px; line-height: 16px; font-weight: 400; letter-spacing: 0.4px; }
+  .md-label-large     { font-size: 14px; line-height: 20px; font-weight: 500; letter-spacing: 0.1px; }
+  .md-label-medium    { font-size: 12px; line-height: 16px; font-weight: 500; letter-spacing: 0.5px; }
+  .md-label-small     { font-size: 11px; line-height: 16px; font-weight: 500; letter-spacing: 0.5px; }
+
+  /* Material Symbols sizing */
+  .material-symbols-outlined {
+    font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+    user-select: none;
+    vertical-align: middle;
+  }
+  .icon-sm { font-size: 18px; }
+  .icon-md { font-size: 20px; }
+  .icon-lg { font-size: 24px; }
+
+  /* ======================================================
+   * Top App Bar
+   * ====================================================== */
+  .app-bar {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 12px 24px;
+    background: var(--md-surface);
+    color: var(--md-on-surface);
+    box-shadow: var(--elev-2);
+    z-index: 100;
+    flex-wrap: wrap;
+    min-height: 64px;
+  }
+  .app-bar__brand {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    font-weight: 500;
+    font-size: 18px;
+    color: var(--md-on-surface);
+  }
+  .app-bar__brand .logo {
+    width: 36px; height: 36px;
+    border-radius: var(--shape-sm);
+    background: linear-gradient(135deg, var(--md-primary-container), var(--md-secondary-container));
+    color: var(--md-on-primary-container);
+    display: flex; align-items: center; justify-content: center;
+    box-shadow: var(--elev-1);
+  }
+  .app-bar__brand .logo .material-symbols-outlined {
+    font-size: 22px;
+    font-variation-settings: 'FILL' 1, 'wght' 500;
+  }
+  .app-bar__brand .badge {
+    margin-left: 4px;
+    padding: 2px 8px;
+    background: var(--md-secondary-container);
+    color: var(--md-on-secondary-container);
+    border-radius: var(--shape-full);
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 0.5px;
+  }
+  .app-bar__controls {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-left: auto;
+  }
+
+  /* ======================================================
+   * Material 3 Buttons
+   * ====================================================== */
+  .md-btn {
+    --bg: var(--md-primary);
+    --fg: var(--md-on-primary);
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    height: 40px;
+    padding: 0 20px;
+    border: none;
+    border-radius: var(--shape-full);
+    background: var(--bg);
+    color: var(--fg);
+    font: 500 14px/1 "Roboto", sans-serif;
+    letter-spacing: 0.1px;
+    cursor: pointer;
+    overflow: hidden;
+    transition:
+      background var(--duration-short) var(--motion-standard),
+      box-shadow var(--duration-short) var(--motion-standard);
+    user-select: none;
+    white-space: nowrap;
+  }
+  .md-btn::before {
+    content: "";
+    position: absolute; inset: 0;
+    background: var(--fg);
+    opacity: 0;
+    transition: opacity var(--duration-short) var(--motion-standard);
+    pointer-events: none;
+  }
+  .md-btn:hover::before  { opacity: var(--state-hover); }
+  .md-btn:focus-visible::before { opacity: var(--state-focus); outline: 2px solid var(--md-primary); outline-offset: 2px; }
+  .md-btn:active::before { opacity: var(--state-pressed); }
+  .md-btn:disabled {
+    background: color-mix(in srgb, var(--md-on-surface) 12%, transparent) !important;
+    color: color-mix(in srgb, var(--md-on-surface) 38%, transparent) !important;
+    cursor: not-allowed;
+    box-shadow: none !important;
+  }
+  .md-btn:disabled::before { display: none; }
+
+  /* Filled tonal variant */
+  .md-btn--tonal {
+    --bg: var(--md-secondary-container);
+    --fg: var(--md-on-secondary-container);
+  }
+  /* Outlined */
+  .md-btn--outlined {
+    --bg: transparent;
+    --fg: var(--md-primary);
+    border: 1px solid var(--md-outline);
+  }
+  .md-btn--outlined:hover { background: color-mix(in srgb, var(--md-primary) 8%, transparent); }
+  /* Text */
+  .md-btn--text {
+    --bg: transparent;
+    --fg: var(--md-primary);
+    padding: 0 12px;
+  }
+  /* Icon-only */
+  .md-icon-btn {
+    width: 40px; height: 40px;
+    padding: 0;
+    border-radius: var(--shape-full);
+    background: transparent;
+    color: var(--md-on-surface-variant);
+    border: none;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+    transition: background var(--duration-short) var(--motion-standard);
+  }
+  .md-icon-btn::before {
+    content: ""; position: absolute; inset: 0;
+    border-radius: inherit;
+    background: var(--md-on-surface);
+    opacity: 0;
+    transition: opacity var(--duration-short);
+  }
+  .md-icon-btn:hover::before  { opacity: var(--state-hover); }
+  .md-icon-btn:active::before { opacity: var(--state-pressed); }
+
+  /* FAB — Floating Action Button */
+  .md-fab {
+    position: absolute;
+    right: 24px;
+    bottom: 32px;
+    width: 56px; height: 56px;
+    border-radius: var(--shape-lg);
+    background: var(--md-primary-container);
+    color: var(--md-on-primary-container);
+    border: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    box-shadow: var(--elev-3);
+    z-index: 600;
+    transition: box-shadow var(--duration-short), transform var(--duration-medium) var(--motion-emphasized);
+  }
+  .md-fab:hover { box-shadow: var(--elev-4); }
+  .md-fab:active { transform: scale(0.96); }
+  .md-fab.is-loading .material-symbols-outlined {
+    animation: spin 1s linear infinite;
+  }
+
+  /* ======================================================
+   * Material 3 Outlined Select / Text Field
+   * ====================================================== */
+  .md-field {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    height: 40px;
+    background: transparent;
+  }
+  .md-select, .md-input {
+    appearance: none;
+    -webkit-appearance: none;
+    height: 40px;
+    padding: 0 36px 0 14px;
+    background: transparent;
+    color: var(--md-on-surface);
+    border: 1px solid var(--md-outline);
+    border-radius: var(--shape-xs);
+    font: 400 14px/1 "Roboto", sans-serif;
+    letter-spacing: 0.25px;
+    cursor: pointer;
+    transition: border-color var(--duration-short) var(--motion-standard);
+    min-width: 140px;
+    outline: none;
+  }
+  .md-select:hover, .md-input:hover { border-color: var(--md-on-surface); }
+  .md-select:focus, .md-input:focus {
+    border-color: var(--md-primary);
+    border-width: 2px;
+    padding-left: 13px;
+  }
+  .md-select option, .md-select optgroup {
+    background: var(--md-surface-high);
+    color: var(--md-on-surface);
+  }
+  .md-field::after {
+    content: "expand_more";
+    font-family: "Material Symbols Outlined";
+    font-size: 20px;
+    color: var(--md-on-surface-variant);
+    position: absolute;
+    right: 10px;
+    pointer-events: none;
+    font-variation-settings: 'wght' 400;
+  }
+  .md-field--input::after { content: ""; }
+
+  .md-input { cursor: text; padding-right: 14px; }
+  .md-input::placeholder { color: var(--md-on-surface-variant); }
+
+  /* ======================================================
+   * Stats / Cache Badge
+   * ====================================================== */
+  .stats-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    height: 32px;
+    padding: 0 12px;
+    background: var(--md-surface-high);
+    color: var(--md-on-surface-variant);
+    border-radius: var(--shape-sm);
+    font-size: 12px;
+    font-weight: 500;
+    letter-spacing: 0.4px;
+  }
+  .stats-chip strong {
+    color: var(--md-on-surface);
+    font-weight: 700;
+  }
+  .stats-chip .divider {
+    width: 1px; height: 14px;
+    background: var(--md-outline-variant);
+  }
+  .cache-badge {
+    color: var(--md-tertiary);
+    font-size: 11px;
+    font-weight: 500;
+  }
+
+  /* ======================================================
+   * Main Content & Map
+   * ====================================================== */
+  main {
+    flex: 1;
+    position: relative;
+    overflow: hidden;
+  }
+  #map {
+    width: 100%;
+    height: 100%;
+    background: var(--md-background);
+  }
+
+  /* Leaflet tweaks */
+  .leaflet-control-attribution {
+    background: rgba(15, 20, 23, 0.7) !important;
+    color: var(--md-on-surface-variant) !important;
+    backdrop-filter: blur(8px);
+    font-size: 10px !important;
+    border-radius: var(--shape-xs);
+    padding: 2px 8px !important;
+  }
+  .leaflet-control-attribution a {
+    color: var(--md-primary) !important;
+  }
+  .leaflet-control-zoom {
+    border: none !important;
+    border-radius: var(--shape-md) !important;
+    overflow: hidden;
+    box-shadow: var(--elev-2);
+  }
+  .leaflet-control-zoom a {
+    background: var(--md-surface-high) !important;
+    color: var(--md-on-surface) !important;
+    border: none !important;
+    border-bottom: 1px solid var(--md-outline-variant) !important;
+    width: 40px !important;
+    height: 40px !important;
+    line-height: 40px !important;
+    font-size: 18px !important;
+  }
+  .leaflet-control-zoom a:last-child { border-bottom: none !important; }
+  .leaflet-control-zoom a:hover { background: var(--md-surface-highest) !important; }
+
+  /* ======================================================
+   * Loading Overlay (Material Circular Progress)
+   * ====================================================== */
+  #loading {
+    position: absolute; inset: 0;
+    background: rgba(15, 20, 23, 0.85);
+    backdrop-filter: blur(8px);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+    gap: 24px;
+    z-index: 999;
+    animation: fadeIn var(--duration-medium) var(--motion-decelerated);
+  }
+  #loading.active { display: flex; }
+  @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+
+  .md-progress-circular {
+    width: 48px; height: 48px;
+    position: relative;
+  }
+  .md-progress-circular::before {
+    content: "";
+    position: absolute; inset: 0;
+    border-radius: 50%;
+    border: 4px solid var(--md-surface-high);
+  }
+  .md-progress-circular::after {
+    content: "";
+    position: absolute; inset: 0;
+    border-radius: 50%;
+    border: 4px solid transparent;
+    border-top-color: var(--md-primary);
+    border-right-color: var(--md-primary);
+    animation: spin 1s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  #loading-text {
+    color: var(--md-on-surface-variant);
+    font-size: 14px;
+    letter-spacing: 0.25px;
+  }
+
+  /* ======================================================
+   * Side Sheet (Cache List Panel)
+   * ====================================================== */
+  #panel {
+    position: absolute;
+    top: 16px;
+    right: 16px;
+    width: 360px;
+    max-height: calc(100% - 32px);
+    background: color-mix(in srgb, var(--md-surface-high) 92%, transparent);
+    backdrop-filter: blur(20px) saturate(140%);
+    border-radius: var(--shape-lg);
+    box-shadow: var(--elev-3);
+    display: flex;
+    flex-direction: column;
+    z-index: 500;
+    overflow: hidden;
+    transition: transform var(--duration-medium) var(--motion-emphasized);
+  }
+  #panel-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--md-outline-variant);
+  }
+  #panel-header .title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--md-on-surface);
+    font-size: 16px;
+    font-weight: 500;
+  }
+  #panel-header .title .material-symbols-outlined { color: var(--md-primary); }
+  #panel-count {
+    color: var(--md-on-surface-variant);
+    font-size: 12px;
+    font-weight: 500;
+    letter-spacing: 0.5px;
+    padding: 4px 10px;
+    background: var(--md-surface-highest);
+    border-radius: var(--shape-full);
+  }
+  #panel-list {
+    overflow-y: auto;
+    flex: 1;
+    scrollbar-width: thin;
+    scrollbar-color: var(--md-outline-variant) transparent;
+  }
+  #panel-list::-webkit-scrollbar { width: 8px; }
+  #panel-list::-webkit-scrollbar-thumb {
+    background: var(--md-outline-variant);
+    border-radius: var(--shape-full);
+  }
+
+  /* Material List Item */
+  .cache-item {
+    position: relative;
+    padding: 12px 20px;
+    border-bottom: 1px solid var(--md-outline-variant);
+    cursor: pointer;
+    transition: background var(--duration-short) var(--motion-standard);
+    display: flex;
+    gap: 12px;
+    align-items: flex-start;
+  }
+  .cache-item::before {
+    content: ""; position: absolute; inset: 0;
+    background: var(--md-on-surface);
+    opacity: 0;
+    transition: opacity var(--duration-short);
+  }
+  .cache-item:hover::before { opacity: var(--state-hover); }
+  .cache-item:active::before { opacity: var(--state-pressed); }
+  .cache-item.is-active { background: color-mix(in srgb, var(--md-primary) 12%, transparent); }
+
+  .cache-item__avatar {
+    flex: 0 0 40px;
+    width: 40px; height: 40px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #fff;
+    font-weight: 700;
+    font-size: 14px;
+    box-shadow: var(--elev-1);
+    margin-top: 2px;
+  }
+  .cache-item__body { flex: 1; min-width: 0; }
+  .cache-item__row1 {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 8px;
+  }
+  .cache-item__code {
+    font-family: "Roboto Mono", "SF Mono", Consolas, monospace;
+    color: var(--md-primary);
+    font-size: 13px;
+    font-weight: 500;
+  }
+  .cache-item__date {
+    font-size: 11px;
+    color: var(--md-on-surface-variant);
+    flex-shrink: 0;
+  }
+  .cache-item__name {
+    font-size: 14px;
+    color: var(--md-on-surface);
+    margin-top: 2px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .cache-item__meta {
+    font-size: 12px;
+    color: var(--md-on-surface-variant);
+    margin-top: 4px;
+    letter-spacing: 0.25px;
+  }
+
+  /* ======================================================
+   * Cache Type Markers (Material avatar style)
+   * ====================================================== */
+  .cache-icon {
+    width: 28px; height: 28px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #fff;
+    font-weight: 700;
+    font-size: 13px;
+    font-family: "Roboto", sans-serif;
+    box-shadow:
+      0 0 0 2px rgba(255, 255, 255, 0.92),
+      var(--elev-2);
+    transition: transform var(--duration-short) var(--motion-emphasized);
+  }
+  .leaflet-marker-icon:hover .cache-icon {
+    transform: scale(1.15);
+  }
+
+  /* ======================================================
+   * Leaflet Popup as Material Card
+   * ====================================================== */
+  .leaflet-popup-content-wrapper {
+    background: var(--md-surface-highest) !important;
+    color: var(--md-on-surface) !important;
+    border-radius: var(--shape-md) !important;
+    box-shadow: var(--elev-3) !important;
+    padding: 4px !important;
+  }
+  .leaflet-popup-tip {
+    background: var(--md-surface-highest) !important;
+    box-shadow: var(--elev-1) !important;
+  }
+  .leaflet-popup-content {
+    margin: 14px 18px !important;
+    line-height: 1.5;
+  }
+  .leaflet-popup-close-button {
+    color: var(--md-on-surface-variant) !important;
+    font-size: 20px !important;
+    padding: 6px 8px !important;
+  }
+
+  .cache-popup { font-size: 13px; min-width: 240px; }
+  .cache-popup .code {
+    font-family: "Roboto Mono", monospace;
+    font-weight: 500;
+    color: var(--md-primary);
+    font-size: 14px;
+    letter-spacing: 0.5px;
+  }
+  .cache-popup .name {
+    font-weight: 500;
+    margin: 4px 0 8px;
+    color: var(--md-on-surface);
+    font-size: 15px;
+  }
+  .cache-popup .meta {
+    color: var(--md-on-surface-variant);
+    font-size: 12px;
+    line-height: 1.7;
+  }
+  .cache-popup .meta b {
+    color: var(--md-on-surface);
+    font-weight: 500;
+  }
+  .cache-popup .links {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-top: 12px;
+    padding-top: 10px;
+    border-top: 1px solid var(--md-outline-variant);
+  }
+  .cache-popup .links a {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    height: 28px;
+    padding: 0 12px;
+    border-radius: var(--shape-full);
+    background: var(--md-secondary-container);
+    color: var(--md-on-secondary-container) !important;
+    text-decoration: none !important;
+    font-size: 12px;
+    font-weight: 500;
+    transition: background var(--duration-short);
+  }
+  .cache-popup .links a:hover {
+    background: color-mix(in srgb, var(--md-primary) 20%, var(--md-secondary-container));
+  }
+
+  /* Marker cluster — Material chip style (圆形 + 按密度分三色) */
+  .marker-cluster {
+    border: 2px solid var(--md-primary) !important;
+    border-radius: 50% !important;
+    box-shadow: var(--elev-2);
+    backdrop-filter: blur(4px);
+    transition: transform var(--duration-short) var(--motion-emphasized);
+  }
+  .marker-cluster:hover { transform: scale(1.08); }
+  .marker-cluster div {
+    background: transparent !important;
+    border-radius: 50% !important;
+    width: 100% !important;
+    height: 100% !important;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin: 0 !important;
+    font-family: "Roboto", sans-serif !important;
+    font-weight: 700 !important;
+    font-size: 13px !important;
+    letter-spacing: 0.2px;
+  }
+  .marker-cluster span { line-height: 1 !important; }
+
+  /* 小：2-9 个 — 冷静的 secondary（sage） */
+  .marker-cluster-small {
+    background: color-mix(in srgb, var(--md-secondary-container) 82%, transparent) !important;
+    border-color: var(--md-secondary) !important;
+  }
+  .marker-cluster-small div { color: var(--md-on-secondary-container) !important; }
+
+  /* 中：10-99 个 — 主色 primary */
+  .marker-cluster-medium {
+    background: color-mix(in srgb, var(--md-primary-container) 82%, transparent) !important;
+    border-color: var(--md-primary) !important;
+  }
+  .marker-cluster-medium div { color: var(--md-on-primary-container) !important; }
+
+  /* 大：100+ 个 — 暖色 tertiary（amber，热点感） */
+  .marker-cluster-large {
+    background: color-mix(in srgb, var(--md-tertiary) 38%, transparent) !important;
+    border-color: var(--md-tertiary) !important;
+  }
+  .marker-cluster-large div {
+    color: var(--md-on-background) !important;
+    font-size: 14px !important;
+  }
+
+  /* ======================================================
+   * Snackbar
+   * ====================================================== */
+  #snackbar-host {
+    position: fixed;
+    bottom: 24px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 2000;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    pointer-events: none;
+  }
+  .snackbar {
+    pointer-events: auto;
+    min-width: 280px;
+    max-width: 480px;
+    padding: 14px 16px;
+    background: var(--md-surface-highest);
+    color: var(--md-on-surface);
+    border-radius: var(--shape-xs);
+    box-shadow: var(--elev-3);
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    font-size: 14px;
+    line-height: 20px;
+    letter-spacing: 0.25px;
+    animation: snackbarIn var(--duration-medium) var(--motion-emphasized);
+  }
+  .snackbar.is-error {
+    background: var(--md-error-container);
+    color: #FFDAD6;
+  }
+  .snackbar.is-success {
+    background: var(--md-primary-container);
+    color: var(--md-on-primary-container);
+  }
+  .snackbar.is-leaving { animation: snackbarOut 200ms forwards; }
+  @keyframes snackbarIn  {
+    from { transform: translateY(20px); opacity: 0; }
+    to   { transform: translateY(0); opacity: 1; }
+  }
+  @keyframes snackbarOut {
+    to { transform: translateY(20px); opacity: 0; }
+  }
+  .snackbar .material-symbols-outlined { flex-shrink: 0; }
+
+  /* ======================================================
+   * Footer (compact)
+   * ====================================================== */
+  footer {
+    padding: 8px 24px;
+    background: var(--md-surface-low);
+    color: var(--md-on-surface-variant);
+    font-size: 11px;
+    text-align: center;
+    letter-spacing: 0.5px;
+  }
+  footer a {
+    color: var(--md-primary);
+    text-decoration: none;
+    font-weight: 500;
+  }
+  footer a:hover { text-decoration: underline; }
+
+  /* ======================================================
+   * Responsive
+   * ====================================================== */
+  @media (max-width: 900px) {
+    .app-bar { padding: 8px 12px; gap: 8px; }
+    .app-bar__brand { font-size: 16px; }
+    .app-bar__brand .badge { display: none; }
+    .md-select { min-width: 110px; padding: 0 32px 0 10px; font-size: 13px; }
+    .md-input { font-size: 13px; }
+    .md-btn { height: 36px; padding: 0 14px; font-size: 13px; }
+    .stats-chip { display: none; }
+    #panel { width: calc(100% - 24px); max-height: 45%; top: auto; bottom: 16px; }
+    .md-fab { right: 16px; bottom: calc(45% + 24px); }
+  }
+</style>
+</head>
+<body>
+
+<header class="app-bar">
+  <div class="app-bar__brand">
+    <div class="logo"><span class="material-symbols-outlined">explore</span></div>
+    <span>TFTC Geocaching</span>
+    <span class="badge">UNOFFICIAL</span>
+  </div>
+
+  <div class="app-bar__controls">
+    <span class="md-field">
+      <select id="endpoint" class="md-select" aria-label="数据源">
+        <option value="dump">📦 全量数据</option>
+        <option value="by-published">🆕 最近发布</option>
+        <option value="by-found">🔍 今日找到</option>
+        <option value="by-event">🎉 活动</option>
+        <option value="by-today">📅 历史上的今天</option>
+        <option value="by-ftf">🏆 FTF 机会</option>
+      </select>
+    </span>
+
+    <span class="md-field">
+      <select id="view-mode" class="md-select" aria-label="显示模式" title="显示模式">
+        <option value="cluster">🔵 聚类</option>
+        <option value="dots">⚪ 小点</option>
+      </select>
+    </span>
+
+    <span class="md-field">
+      <select id="basemap" class="md-select" aria-label="底图" title="底图样式">
+        <optgroup label="WGS-84 (无偏移)">
+          <option value="carto_dark" selected>🌑 Carto 暗色</option>
+          <option value="carto_light">☀️ Carto 亮色</option>
+          <option value="osm">🗺️ OSM 标准</option>
+          <option value="esri_sat">🛰️ Esri 卫星</option>
+          <option value="esri_topo">⛰️ Esri 地形</option>
+        </optgroup>
+        <optgroup label="GCJ-02 (国内, 自动加偏)">
+          <option value="amap">🇨🇳 高德矢量</option>
+          <option value="amap_sat">🛰️ 高德卫星</option>
+          <option value="tencent">🇨🇳 腾讯街道</option>
+        </optgroup>
+      </select>
+    </span>
+
+    <span class="md-field">
+      <select id="filter-type" class="md-select" aria-label="类型筛选">
+        <option value="">全部类型</option>
+        <option value="2">Traditional</option>
+        <option value="3">Multi-Cache</option>
+        <option value="4">Virtual</option>
+        <option value="5">Letterbox</option>
+        <option value="6">Event</option>
+        <option value="8">Mystery</option>
+        <option value="11">Webcam</option>
+        <option value="13">CITO</option>
+        <option value="137">Earthcache</option>
+        <option value="453">Mega-Event</option>
+      </select>
+    </span>
+
+    <span class="md-field md-field--input">
+      <input type="search" id="search" class="md-input" placeholder="搜索 GC 编号..." style="min-width: 160px" />
+    </span>
+
+    <button class="md-btn md-btn--tonal" id="btn-export" title="导出当前数据为 JSON">
+      <span class="material-symbols-outlined icon-sm">download</span>
+      导出
+    </button>
+
+    <button class="md-icon-btn" id="btn-theme" title="切换亮/暗主题" aria-label="切换主题">
+      <span class="material-symbols-outlined icon-md" id="theme-icon">light_mode</span>
+    </button>
+
+    <button class="md-icon-btn" id="btn-clear-cache" title="清空本地 IndexedDB 缓存" aria-label="清空缓存">
+      <span class="material-symbols-outlined icon-md">delete_sweep</span>
+    </button>
+
+    <span class="stats-chip">
+      <span><strong id="total">0</strong> 总数</span>
+      <span class="divider"></span>
+      <span><strong id="visible">0</strong> 显示</span>
+      <span class="divider"></span>
+      <span class="cache-badge" id="cache-badge"></span>
+    </span>
+  </div>
+</header>
+
+<main>
+  <div id="map"></div>
+
+  <div id="loading">
+    <div class="md-progress-circular"></div>
+    <div id="loading-text" class="md-body-medium">正在拉取数据...</div>
+  </div>
+
+  <aside id="panel" aria-label="藏点列表">
+    <div id="panel-header">
+      <div class="title">
+        <span class="material-symbols-outlined icon-md">format_list_bulleted</span>
+        <span>藏点列表</span>
+      </div>
+      <span id="panel-count">0</span>
+    </div>
+    <div id="panel-list"></div>
+  </aside>
+
+  <button class="md-fab" id="btn-load" title="刷新数据 (跳过缓存)" aria-label="刷新">
+    <span class="material-symbols-outlined icon-lg">refresh</span>
+  </button>
+</main>
+
+<footer>
+  数据来源 <a href="https://tftc.top" target="_blank" rel="noopener">tftc.top</a> ·
+  仅技术学习用途，与
+  <a href="https://www.geocaching.com" target="_blank" rel="noopener">Geocaching HQ</a>
+  无关
+</footer>
+
+<div id="snackbar-host" aria-live="polite"></div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
+<script src="./app.js"></script>
+</body>
+</html>
