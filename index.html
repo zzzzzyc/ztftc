@@ -179,24 +179,26 @@
   .app-bar {
     display: flex;
     align-items: center;
-    gap: 16px;
-    padding: 12px 24px;
+    gap: 12px;
+    padding: 10px 20px;
     background: var(--md-surface);
     color: var(--md-on-surface);
     box-shadow: var(--elev-2);
     z-index: 100;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
     min-height: 64px;
     position: relative;
     z-index: 3000;
   }
   .app-bar__brand {
     display: flex;
+    flex: 0 0 auto;
     align-items: center;
     gap: 12px;
     font-weight: 500;
     font-size: 18px;
     color: var(--md-on-surface);
+    white-space: nowrap;
   }
   .app-bar__brand .logo {
     width: 36px; height: 36px;
@@ -220,13 +222,27 @@
     font-weight: 500;
     letter-spacing: 0.5px;
   }
-  .app-bar__controls {
+  .app-bar__primary {
     display: flex;
     align-items: center;
     gap: 8px;
-    flex-wrap: wrap;
+    flex: 0 0 auto;
+  }
+  .app-bar__secondary {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex: 0 1 auto;
+    min-width: 0;
+  }
+  .app-bar__quick {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex: 0 0 auto;
     margin-left: auto;
   }
+  .md-icon-btn.app-bar__mobile-toggle { display: none; }
 
   /* ======================================================
    * Material 3 Buttons
@@ -297,15 +313,17 @@
     width: 40px; height: 40px;
     padding: 0;
     border-radius: var(--shape-full);
-    background: transparent;
-    color: var(--md-on-surface-variant);
-    border: none;
+    background: var(--md-surface-high);
+    color: var(--md-on-surface);
+    border: 1px solid var(--md-outline-variant);
     cursor: pointer;
     display: inline-flex;
     align-items: center;
     justify-content: center;
     position: relative;
-    transition: background var(--duration-short) var(--motion-standard);
+    transition:
+      background var(--duration-short) var(--motion-standard),
+      border-color var(--duration-short) var(--motion-standard);
   }
   .md-icon-btn::before {
     content: ""; position: absolute; inset: 0;
@@ -314,10 +332,18 @@
     opacity: 0;
     transition: opacity var(--duration-short);
   }
-  .md-icon-btn:hover::before  { opacity: var(--state-hover); }
-  .md-icon-btn:active::before { opacity: var(--state-pressed); }
+  .md-icon-btn:hover {
+    background: var(--md-surface-highest);
+    border-color: var(--md-outline);
+  }
+  .md-icon-btn:hover::before  { opacity: 0; }
+  .md-icon-btn:active {
+    background: color-mix(in srgb, var(--md-primary) 16%, var(--md-surface-highest));
+    border-color: color-mix(in srgb, var(--md-primary) 50%, var(--md-outline));
+  }
+  .md-icon-btn:active::before { opacity: 0; }
   .md-icon-btn.is-active {
-    background: color-mix(in srgb, var(--md-tertiary) 22%, transparent);
+    background: color-mix(in srgb, var(--md-tertiary) 22%, var(--md-surface-high));
     color: var(--md-tertiary);
     border: 1px solid color-mix(in srgb, var(--md-tertiary) 55%, transparent);
   }
@@ -541,6 +567,15 @@
     overflow: hidden;
     transition: transform var(--duration-medium) var(--motion-emphasized);
   }
+  #panel.is-collapsed {
+    max-height: 68px;
+  }
+  #panel.is-collapsed #panel-header {
+    border-bottom: none;
+  }
+  #panel.is-collapsed #panel-list {
+    display: none;
+  }
   #panel-header {
     display: flex;
     align-items: center;
@@ -565,6 +600,11 @@
     padding: 4px 10px;
     background: var(--md-surface-highest);
     border-radius: var(--shape-full);
+  }
+  .panel-toggle-btn {
+    color: var(--md-on-surface-variant);
+    width: 32px;
+    height: 32px;
   }
   #panel-list {
     overflow-y: auto;
@@ -912,16 +952,68 @@
   /* ======================================================
    * Responsive
    * ====================================================== */
-  @media (max-width: 900px) {
-    .app-bar { padding: 8px 12px; gap: 8px; }
+  /* 1280px 以下：藏起统计胶囊（不影响交互） */
+  @media (max-width: 1279.98px) {
+    .stats-chip { display: none; }
+  }
+
+  /* 1024px 以下：再藏导出和清缓存（用频率较低） */
+  @media (max-width: 1023.98px) {
+    #btn-export, #btn-clear-cache { display: none; }
+    .md-select { min-width: 124px; }
+  }
+
+  /* 900px 以下：进入移动端模式 —— secondary 整组进“更多”折叠 */
+  @media (max-width: 899.98px) {
+    .app-bar { flex-wrap: wrap; padding: 8px 12px; gap: 8px; min-height: 56px; }
     .app-bar__brand { font-size: 16px; }
     .app-bar__brand .badge { display: none; }
-    .md-select { min-width: 110px; padding: 0 32px 0 10px; font-size: 13px; }
+    .md-icon-btn.app-bar__mobile-toggle { display: inline-flex; }
+
+    /* 默认隐藏 secondary，单行 = brand + primary + quick */
+    .app-bar__secondary { display: none; }
+    /* 展开“更多”后 secondary 作为整行第二行出现 */
+    .app-bar.mobile-controls-expanded .app-bar__secondary {
+      display: flex;
+      flex-wrap: wrap;
+      flex-basis: 100%;
+      order: 99;
+      gap: 8px;
+      margin-left: 0;
+    }
+    /* 强制让 stats / export / clear-cache 在展开时也显示出来 */
+    .app-bar.mobile-controls-expanded #btn-export,
+    .app-bar.mobile-controls-expanded #btn-clear-cache,
+    .app-bar.mobile-controls-expanded .stats-chip { display: inline-flex; }
+
+    .md-select { min-width: 110px; padding: 0 30px 0 10px; font-size: 13px; }
     .md-input { font-size: 13px; }
     .md-btn { height: 36px; padding: 0 14px; font-size: 13px; }
-    .stats-chip { display: none; }
     #panel { width: calc(100% - 24px); max-height: 45%; top: auto; bottom: 16px; }
+    #panel.is-collapsed { max-height: 60px; }
     .md-fab { right: 16px; bottom: calc(45% + 24px); }
+  }
+
+  /* 480px 以下：藏起 brand 文字，仅留 logo；尺寸再压一档 */
+  @media (max-width: 479.98px) {
+    .app-bar { gap: 6px; padding: 6px 10px; }
+    .app-bar__brand > span { display: none; }
+    .app-bar__brand .logo { width: 32px; height: 32px; }
+    .app-bar__primary { gap: 6px; }
+    .app-bar__quick { gap: 4px; }
+    .md-select { min-width: 100px; font-size: 12px; padding: 0 26px 0 8px; }
+    .md-btn { padding: 0 10px; font-size: 12px; }
+    .md-icon-btn { width: 36px; height: 36px; }
+    #panel { max-height: 40%; }
+    .md-fab { bottom: calc(40% + 20px); }
+  }
+
+  /* 380px 以下：极窄设备 —— 把 view-mode 也收进“更多”里 */
+  @media (max-width: 379.98px) {
+    .app-bar__primary > .md-field:nth-child(2) { display: none; }
+    .app-bar.mobile-controls-expanded .app-bar__primary > .md-field:nth-child(2) { display: inline-flex; }
+    .md-icon-btn { width: 34px; height: 34px; }
+    .md-select { min-width: 110px; }
   }
 </style>
 </head>
@@ -933,7 +1025,7 @@
     <span>ztftc</span>
   </div>
 
-  <div class="app-bar__controls">
+  <div class="app-bar__primary">
     <span class="md-field">
       <select id="endpoint" class="md-select" aria-label="数据源">
         <option value="dump">📦 全量数据</option>
@@ -951,7 +1043,9 @@
         <option value="dots">⚪ 小点</option>
       </select>
     </span>
+  </div>
 
+  <div class="app-bar__secondary">
     <span class="md-field">
       <select id="basemap" class="md-select" aria-label="底图" title="底图样式">
         <optgroup label="WGS-84 (无偏移)">
@@ -985,22 +1079,9 @@
       </select>
     </span>
 
-
     <button class="md-btn md-btn--tonal" id="btn-export" title="导出当前数据为 JSON">
       <span class="material-symbols-outlined icon-sm">download</span>
       导出
-    </button>
-
-    <button class="md-icon-btn" id="btn-theme" title="切换亮/暗主题" aria-label="切换主题">
-      <span class="material-symbols-outlined icon-md" id="theme-icon">light_mode</span>
-    </button>
-
-    <button class="md-icon-btn" id="btn-oc-layer" title="显示/隐藏 OpenCaching 图层" aria-label="OpenCaching 图层开关">
-      <span class="material-symbols-outlined icon-md">layers</span>
-    </button>
-
-    <button class="md-icon-btn" id="btn-oc-only" title="仅显示 OC（隐藏 GC）" aria-label="仅显示OC模式">
-      <span class="material-symbols-outlined icon-md">visibility_off</span>
     </button>
 
     <button class="md-icon-btn" id="btn-clear-cache" title="清空本地 IndexedDB 缓存" aria-label="清空缓存">
@@ -1016,6 +1097,24 @@
       <span class="divider"></span>
       <span class="cache-badge" id="data-time" title="当前数据时间"></span>
     </span>
+  </div>
+
+  <div class="app-bar__quick">
+    <button class="md-icon-btn" id="btn-theme" title="切换亮/暗主题" aria-label="切换主题">
+      <span class="material-symbols-outlined icon-md" id="theme-icon">light_mode</span>
+    </button>
+
+    <button class="md-icon-btn" id="btn-oc-layer" title="显示/隐藏 OpenCaching 图层" aria-label="OpenCaching 图层开关">
+      <span class="material-symbols-outlined icon-md">layers</span>
+    </button>
+
+    <button class="md-icon-btn" id="btn-oc-only" title="仅显示 OC（隐藏 GC）" aria-label="仅显示OC模式">
+      <span class="material-symbols-outlined icon-md">visibility_off</span>
+    </button>
+
+    <button class="md-icon-btn app-bar__mobile-toggle" id="btn-controls-toggle" title="展开更多选项" aria-label="展开更多选项" aria-expanded="false">
+      <span class="material-symbols-outlined icon-md" id="controls-toggle-icon">tune</span>
+    </button>
   </div>
 </header>
 
@@ -1033,7 +1132,12 @@
         <span class="material-symbols-outlined icon-md">format_list_bulleted</span>
         <span>藏点列表</span>
       </div>
-      <span id="panel-count">0</span>
+      <div style="display:flex;align-items:center;gap:8px;">
+        <span id="panel-count">0</span>
+        <button class="md-icon-btn panel-toggle-btn" id="btn-panel-toggle" title="收起藏点列表" aria-label="收起藏点列表" aria-expanded="true">
+          <span class="material-symbols-outlined icon-md" id="panel-toggle-icon">keyboard_arrow_down</span>
+        </button>
+      </div>
     </div>
     <div id="panel-list"></div>
   </aside>

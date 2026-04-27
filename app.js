@@ -176,6 +176,8 @@ const CHINA_BORDER_BUFFER_KM = 80;
 const OC_SITES_ENABLED = ["ocde", "ocpl"];
 const OC_CACHE_TTL = 12 * 60 * 60 * 1000;
 const OC_CACHE_VERSION = "v3";
+const OC_WEBUI_URL = "https://oc.zzzzzyc.top";
+const OC_WEBUI_HINT_SESSION_KEY = "oc-webui-hint-shown";
 
 let allCaches = [];
 let ocCaches = []; // 预留：后续接入 OCAPI 后填充
@@ -188,6 +190,9 @@ let lastCacheMeta = null; // { key, ts, fromCache }
 let lastDataTimeText = "";
 let currentBasemap = "carto_dark";
 let currentTileLayer = null;
+const MOBILE_MEDIA_QUERY = window.matchMedia("(max-width: 900px)");
+let panelCollapsed = false;
+let mobileControlsExpanded = false;
 
 // 预留给 OCAPI 接入：外部可调用 window.setOcCaches([...]) 写入 OC 数据并触发重渲染
 window.setOcCaches = function setOcCaches(next) {
@@ -408,6 +413,76 @@ function setLoading(on, text = "正在拉取数据...") {
   if (loadingEl) loadingEl.classList.toggle("active", on);
   const fab = $id("btn-load");
   if (fab) fab.classList.toggle("is-loading", on);
+}
+
+function isMobileViewport() {
+  return MOBILE_MEDIA_QUERY.matches;
+}
+
+function setMobileControlsExpanded(expanded) {
+  mobileControlsExpanded = !!expanded;
+  const appBar = document.querySelector(".app-bar");
+  const btn = $id("btn-controls-toggle");
+  const icon = $id("controls-toggle-icon");
+  if (appBar) appBar.classList.toggle("mobile-controls-expanded", mobileControlsExpanded);
+  if (btn) {
+    btn.setAttribute("aria-expanded", String(mobileControlsExpanded));
+    const title = mobileControlsExpanded ? "收起更多选项" : "展开更多选项";
+    btn.title = title;
+    btn.setAttribute("aria-label", title);
+  }
+  if (icon) icon.textContent = mobileControlsExpanded ? "unfold_less" : "tune";
+}
+
+function setPanelCollapsed(collapsed) {
+  panelCollapsed = !!collapsed;
+  const panel = $id("panel");
+  const btn = $id("btn-panel-toggle");
+  const icon = $id("panel-toggle-icon");
+  if (panel) panel.classList.toggle("is-collapsed", panelCollapsed);
+  if (btn) {
+    btn.setAttribute("aria-expanded", String(!panelCollapsed));
+    const title = panelCollapsed ? "展开藏点列表" : "收起藏点列表";
+    btn.title = title;
+    btn.setAttribute("aria-label", title);
+  }
+  if (icon) icon.textContent = panelCollapsed ? "keyboard_arrow_up" : "keyboard_arrow_down";
+  updateFabPosition();
+}
+
+function autoCollapsePanelOnMobile() {
+  if (isMobileViewport()) setPanelCollapsed(true);
+}
+
+function updateFabPosition() {
+  const fab = $id("btn-load");
+  if (!fab) return;
+  if (!isMobileViewport()) {
+    fab.style.bottom = "32px";
+    return;
+  }
+  const isVerySmall = window.matchMedia("(max-width: 479.98px)").matches;
+  fab.style.bottom = panelCollapsed
+    ? "88px"
+    : (isVerySmall ? "calc(40% + 20px)" : "calc(45% + 24px)");
+}
+
+function showOcWebUiHintOncePerSession() {
+  try {
+    if (sessionStorage.getItem(OC_WEBUI_HINT_SESSION_KEY) === "1") return;
+    sessionStorage.setItem(OC_WEBUI_HINT_SESSION_KEY, "1");
+  } catch (_) {
+    // sessionStorage 不可用时直接降级为不提示
+    return;
+  }
+  showSnackbar("也可以试试我做的 OC Web UI", {
+    type: "info",
+    duration: 5200,
+    action: {
+      label: "打开",
+      onClick: () => window.open(OC_WEBUI_URL, "_blank", "noopener"),
+    },
+  });
 }
 
 /* ---------------- IndexedDB 缓存层 ---------------- */
@@ -814,6 +889,7 @@ function highlightInList(code) {
   // 自动滚动到激活项
   const active = document.querySelector(".cache-item.is-active");
   if (active) active.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  autoCollapsePanelOnMobile();
 }
 
 function fmtAge(ms) {
@@ -946,6 +1022,7 @@ async function load(force = false) {
       (result.ts ? new Date(result.ts).toLocaleString("zh-CN", { hour12: false }) : "");
     updateCacheBadge();
     render(allCaches);
+    autoCollapsePanelOnMobile();
 
     const n = result.data.length.toLocaleString();
     if (result.source === "derived") {
@@ -1086,6 +1163,9 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   initMap();
+  setPanelCollapsed(isMobileViewport());
+  setMobileControlsExpanded(false);
+  updateFabPosition();
 
   // 端点切换 → 自动加载（用缓存）
   on("endpoint", "change", () => load(false));
@@ -1094,21 +1174,34 @@ document.addEventListener("DOMContentLoaded", () => {
   on("view-mode", "change", (e) => {
     viewMode = e.target.value;
     if (allCaches.length) render(allCaches);
+    autoCollapsePanelOnMobile();
   });
 
   // 底图切换 → 换 tile, 必要时重投影 marker
   on("basemap", "change", (e) => {
     setBasemap(e.target.value);
+    autoCollapsePanelOnMobile();
   });
 
   // 类型筛选 → 仅重渲染
-  on("filter-type", "change", () => render(allCaches));
+  on("filter-type", "change", () => {
+    render(allCaches);
+    autoCollapsePanelOnMobile();
+  });
 
   // 「刷新」按钮 → 强制跳缓存
   on("btn-load", "click", () => load(true));
 
   // 「导出」按钮
   on("btn-export", "click", exportJson);
+
+  on("btn-controls-toggle", "click", () => {
+    setMobileControlsExpanded(!mobileControlsExpanded);
+  });
+
+  on("btn-panel-toggle", "click", () => {
+    setPanelCollapsed(!panelCollapsed);
+  });
 
   // 「主题切换」按钮
   on("btn-theme", "click", () => {
@@ -1121,6 +1214,7 @@ document.addEventListener("DOMContentLoaded", () => {
     ocBtn.addEventListener("click", async () => {
       ocLayerVisible = !ocLayerVisible;
       ocBtn.classList.toggle("is-active", ocLayerVisible);
+      if (ocLayerVisible) showOcWebUiHintOncePerSession();
       if (ocLayerVisible && !ocCaches.length) {
         try {
           await loadOcFull(false);
@@ -1131,6 +1225,7 @@ document.addEventListener("DOMContentLoaded", () => {
         }
       }
       if (allCaches.length) render(allCaches);
+      autoCollapsePanelOnMobile();
     });
   }
 
@@ -1154,6 +1249,7 @@ document.addEventListener("DOMContentLoaded", () => {
       ocOnlyBtn.classList.toggle("is-active", ocOnlyMode);
       if (ocBtn) ocBtn.classList.toggle("is-active", ocLayerVisible);
       if (allCaches.length) render(allCaches);
+      autoCollapsePanelOnMobile();
       showSnackbar(ocOnlyMode ? "已切换为仅显示 OC" : "已退出仅显示 OC", { type: "info", duration: 1800 });
     });
   }
@@ -1172,4 +1268,20 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // 首次加载
   load(false);
+
+  const onViewportChange = () => {
+    if (isMobileViewport()) {
+      setPanelCollapsed(true);
+      setMobileControlsExpanded(false);
+    } else {
+      setPanelCollapsed(false);
+      setMobileControlsExpanded(false);
+    }
+    updateFabPosition();
+  };
+  if (typeof MOBILE_MEDIA_QUERY.addEventListener === "function") {
+    MOBILE_MEDIA_QUERY.addEventListener("change", onViewportChange);
+  } else if (typeof MOBILE_MEDIA_QUERY.addListener === "function") {
+    MOBILE_MEDIA_QUERY.addListener(onViewportChange);
+  }
 });
