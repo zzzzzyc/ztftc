@@ -1,0 +1,16 @@
+services:
+  ztftc:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ztftc
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      TZ: Asia/Shanghai
+      # 可选：配置后端 OCAPI key
+      # OCAPI_OCDE_KEY: "your_key"
+      # OCAPI_OCUS_KEY: "your_key"
+      # OCAPI_OCPL_KEY: "your_key"
+      # OCAPI_OCNL_KEY: "your_key"

@@ -27,6 +27,13 @@ const ENDPOINTS = {
 
 if (BACKEND) console.log(`[mode] backend proxy: ${BACKEND}`);
 
+const $id = (id) => document.getElementById(id);
+const on = (id, event, handler) => {
+  const el = $id(id);
+  if (el) el.addEventListener(event, handler);
+  return el;
+};
+
 const CACHE_TYPES = {
   2:   { name: "Traditional", color: "#2db82d", letter: "T" },
   3:   { name: "Multi-Cache", color: "#f0a500", letter: "M" },
@@ -39,6 +46,11 @@ const CACHE_TYPES = {
   137: { name: "Earthcache",  color: "#795548", letter: "Ⓔ" },
   453: { name: "Mega-Event",  color: "#d81b60", letter: "★" },
   3653:{ name: "Lab",         color: "#00bfa5", letter: "🧪"},
+  901: { name: "OC Moving",   color: "#8e24aa", letter: "Mv" },
+  902: { name: "Locationless",color: "#546e7a", letter: "L0" },
+  903: { name: "Drive-In",    color: "#ef6c00", letter: "D" },
+  904: { name: "Own",         color: "#6d4c41", letter: "O" },
+  905: { name: "Podcast",     color: "#00897b", letter: "P" },
 };
 
 const cacheTypeInfo = (t) => CACHE_TYPES[t] || { name: `Type ${t}`, color: "#888", letter: "?" };
@@ -71,6 +83,25 @@ function _transformLng(x, y) {
 }
 function _outOfChina(lng, lat) {
   return lng < 72.004 || lng > 137.8347 || lat < 0.8293 || lat > 55.8271;
+}
+
+function isInChinaApprox(lat, lng, bufferKm = 0) {
+  // 近似主范围（包含大陆/海南/港澳台常见范围）
+  const LAT_MIN = 18.0;
+  const LAT_MAX = 54.5;
+  const LNG_MIN = 73.0;
+  const LNG_MAX = 135.2;
+
+  const dLat = bufferKm / 111.0;
+  // 中纬度经度换算近似，够用且开销小
+  const dLng = bufferKm / 91.0; // ~= 111 * cos(35°)
+
+  return (
+    lat >= (LAT_MIN - dLat) &&
+    lat <= (LAT_MAX + dLat) &&
+    lng >= (LNG_MIN - dLng) &&
+    lng <= (LNG_MAX + dLng)
+  );
 }
 
 /** WGS-84 → GCJ-02 */
@@ -134,18 +165,35 @@ const BASEMAPS = {
 
 // 缓存 TTL（毫秒）
 const CACHE_TTL = {
-  dump: 60 * 60 * 1000,   // 全量数据 1 小时（CDN 也是按小时刷的）
+  dump: 2 * 60 * 60 * 1000, // 全量数据 2 小时，降低重拉频率
   default: 5 * 60 * 1000, // 其它端点 5 分钟
 };
 // true: 非 dump 端点优先由 dump 本地派生，减少额外网络请求
 const PREFER_DERIVED_FROM_DUMP = true;
+// 前置地理过滤：只保留中国范围（近似）点位；后续可替换为国境多边形精确判定。
+const ONLY_CHINA_POINTS = true;
+const CHINA_BORDER_BUFFER_KM = 80;
+const OC_SITES_ENABLED = ["ocde", "ocpl"];
+const OC_CACHE_TTL = 12 * 60 * 60 * 1000;
+const OC_CACHE_VERSION = "v3";
 
 let allCaches = [];
-let map, clusterGroup, dotsLayer, canvasRenderer;
+let ocCaches = []; // 预留：后续接入 OCAPI 后填充
+let map, gcClusterGroup, ocClusterGroup, gcDotsLayer, ocDotsLayer, canvasRenderer;
 let viewMode = "cluster";
+let ocLayerVisible = false;
+let gcLayerVisible = true;
+let ocOnlyMode = false;
 let lastCacheMeta = null; // { key, ts, fromCache }
+let lastDataTimeText = "";
 let currentBasemap = "carto_dark";
 let currentTileLayer = null;
+
+// 预留给 OCAPI 接入：外部可调用 window.setOcCaches([...]) 写入 OC 数据并触发重渲染
+window.setOcCaches = function setOcCaches(next) {
+  ocCaches = Array.isArray(next) ? next : [];
+  if (allCaches.length) render(allCaches);
+};
 
 function setBasemap(key) {
   const def = BASEMAPS[key];
@@ -175,16 +223,30 @@ function initMap() {
 
   setBasemap(currentBasemap);
 
-  clusterGroup = L.markerClusterGroup({
+  gcClusterGroup = L.markerClusterGroup({
     chunkedLoading: true,
     maxClusterRadius: 50,
+  });
+  ocClusterGroup = L.markerClusterGroup({
+    chunkedLoading: true,
+    maxClusterRadius: 50,
+    iconCreateFunction: (cluster) => {
+      const n = cluster.getChildCount();
+      const sizeClass = n < 10 ? "small" : (n < 100 ? "medium" : "large");
+      return L.divIcon({
+        html: `<div class="oc-cluster-shell"><span>${n}</span></div>`,
+        className: `marker-cluster marker-cluster-oc marker-cluster-oc-${sizeClass}`,
+        iconSize: L.point(40, 40),
+      });
+    },
   });
 
   // Canvas renderer makes circleMarker very fast even with 10k+ points.
   canvasRenderer = L.canvas({ padding: 0.5 });
-  dotsLayer = L.layerGroup();
+  gcDotsLayer = L.layerGroup();
+  ocDotsLayer = L.layerGroup();
 
-  map.addLayer(clusterGroup);
+  map.addLayer(gcClusterGroup);
 }
 
 function makeIcon(type) {
@@ -192,6 +254,16 @@ function makeIcon(type) {
   return L.divIcon({
     className: "cache-marker",
     html: `<div class="cache-icon" style="background:${info.color}">${info.letter}</div>`,
+    iconSize: [28, 28],
+    iconAnchor: [14, 14],
+  });
+}
+
+function makeOcIcon(type) {
+  const info = cacheTypeInfo(type);
+  return L.divIcon({
+    className: "cache-marker",
+    html: `<div class="oc-cache-icon"><span class="oc-cache-icon__inner" style="background:${info.color}">${info.letter || "?"}</span></div>`,
     iconSize: [28, 28],
     iconAnchor: [14, 14],
   });
@@ -242,21 +314,42 @@ function fmtDate(s) {
   catch { return s; }
 }
 
-function makePopup(c) {
+function isOcCache(c) {
+  return !!c?._source || String(c?.code || "").toUpperCase().startsWith("OC");
+}
+
+function ocSiteBase(source) {
+  const s = String(source || "").toLowerCase();
+  if (s === "ocde") return "https://www.opencaching.de";
+  if (s === "ocpl") return "https://opencaching.pl";
+  if (s === "ocus") return "https://www.opencaching.us";
+  if (s === "ocnl") return "https://www.opencaching.nl";
+  if (s === "ocro") return "https://www.opencaching.ro";
+  return "https://www.opencaching.de";
+}
+
+function makePopupSingle(c) {
   const info = cacheTypeInfo(c.geocacheType);
-  return `
-    <div class="cache-popup">
-      <div><span class="code">${c.code}</span></div>
-      <div class="name">${c.name || "(no name)"}</div>
-      <div class="meta">
-        <b style="color:${info.color}">●</b> <b>${info.name}</b> · D${c.difficulty}/T${c.terrain}<br>
-        Owner: <b>${c.ownerUsername || "?"}</b><br>
-        发布: ${fmtDate(c.placedDate)}<br>
-        ${c.lastFoundDate ? `上次找到: ${fmtDate(c.lastFoundDate)}<br>` : ""}
-        ${c.favoritePoints != null ? `❤ ${c.favoritePoints} 收藏<br>` : ""}
-        WGS-84: ${c.latitude?.toFixed(5)}, ${c.longitude?.toFixed(5)}
-      </div>
-      <div class="links">
+  const sourceTag = c._source ? ` · <b>OC:${String(c._source).toUpperCase()}</b>` : "";
+  const oc = isOcCache(c);
+  const base = ocSiteBase(c._source);
+  const cacheUrl = c._url || base;
+  const ownerSearchUrl = c.ownerUsername
+    ? `${base}/search.php?searchto=searchbyowner&showresult=1&owner=${encodeURIComponent(c.ownerUsername)}`
+    : base;
+  const linksHtml = oc
+    ? `
+        <a href="${cacheUrl}" target="_blank" rel="noopener">
+          <span class="material-symbols-outlined" style="font-size:14px">open_in_new</span>OC 页面
+        </a>
+        <a href="${base}" target="_blank" rel="noopener">
+          <span class="material-symbols-outlined" style="font-size:14px">public</span>OC 站点
+        </a>
+        <a href="${ownerSearchUrl}" target="_blank" rel="noopener">
+          <span class="material-symbols-outlined" style="font-size:14px">person</span>Owner
+        </a>
+      `
+    : `
         <a href="https://www.geocaching.com/geocache/${c.code}" target="_blank" rel="noopener">
           <span class="material-symbols-outlined" style="font-size:14px">open_in_new</span>官方
         </a>
@@ -266,15 +359,54 @@ function makePopup(c) {
         <a href="https://www.geocaching.com/p/?u=${encodeURIComponent(c.ownerUsername || "")}" target="_blank" rel="noopener">
           <span class="material-symbols-outlined" style="font-size:14px">person</span>Owner
         </a>
+      `;
+  return `
+    <div class="cache-popup" style="min-width:240px">
+      <div><span class="code">${c.code}</span></div>
+      <div class="name">${c.name || "(no name)"}</div>
+      <div class="meta">
+        <b style="color:${info.color}">●</b> <b>${info.name}</b>${sourceTag} · D${c.difficulty}/T${c.terrain}<br>
+        ${oc ? `类型源: <b>${escapeHtml(c._ocRawType || "-")}</b> (${escapeHtml(c._ocTypeNorm || "-")})<br>` : ""}
+        Owner: <b>${c.ownerUsername || "?"}</b><br>
+        发布: ${fmtDate(c.placedDate)}<br>
+        ${c.lastFoundDate ? `上次找到: ${fmtDate(c.lastFoundDate)}<br>` : ""}
+        ${c.favoritePoints != null ? `❤ ${c.favoritePoints} 收藏<br>` : ""}
+        WGS-84: ${c.latitude?.toFixed(5)}, ${c.longitude?.toFixed(5)}
+      </div>
+      <div class="links">
+        ${linksHtml}
       </div>
     </div>
   `;
 }
 
+function coordKey(c) {
+  // 6 位小数约 0.11m，足够把“同一点位”聚到一起
+  return `${Number(c.latitude).toFixed(6)},${Number(c.longitude).toFixed(6)}`;
+}
+
+function makePopup(c, sameSpotCaches = null) {
+  const group = Array.isArray(sameSpotCaches) && sameSpotCaches.length
+    ? sameSpotCaches
+    : [c];
+  if (group.length <= 1) return makePopupSingle(c);
+
+  const sorted = [...group].sort((a, b) => String(a.code || "").localeCompare(String(b.code || "")));
+  const header = `
+    <div style="margin-bottom:8px;padding:6px 8px;border-radius:8px;background:color-mix(in srgb, var(--md-primary) 12%, transparent);font-size:12px;">
+      同坐标点位共 <b>${sorted.length}</b> 个藏点
+    </div>
+  `;
+  const items = sorted.map((x) => `<div style="padding-top:8px;margin-top:8px;border-top:1px solid var(--md-outline-variant);">${makePopupSingle(x)}</div>`).join("");
+  return `<div style="max-height:320px;overflow:auto;padding-right:2px;">${header}${items}</div>`;
+}
+
 function setLoading(on, text = "正在拉取数据...") {
-  document.getElementById("loading-text").textContent = text;
-  document.getElementById("loading").classList.toggle("active", on);
-  const fab = document.getElementById("btn-load");
+  const textEl = $id("loading-text");
+  const loadingEl = $id("loading");
+  if (textEl) textEl.textContent = text;
+  if (loadingEl) loadingEl.classList.toggle("active", on);
+  const fab = $id("btn-load");
   if (fab) fab.classList.toggle("is-loading", on);
 }
 
@@ -438,6 +570,46 @@ async function decompressGzipBytes(buf) {
   return JSON.parse(await new Response(stream).text());
 }
 
+function parseDumpDataTimeFromUrl(url) {
+  if (!url) return "";
+  const m = String(url).match(/geocaches_(\d{4})-(\d{2})-(\d{2})_(\d{2})\.gz/);
+  if (!m) return "";
+  return `${m[1]}-${m[2]}-${m[3]} ${m[4]}:00`;
+}
+
+async function getFreshDumpFromLocalCacheOnly() {
+  // 只读已有缓存，不触发网络请求；用于默认非全量端点，避免首屏拉全量。
+  if (BACKEND) {
+    const entry = await cacheGet("endpoint:dump-backend");
+    if (entry && Date.now() - entry.ts < CACHE_TTL.dump) {
+      return {
+        data: entry.data,
+        ts: entry.ts,
+        fromCache: true,
+        source: "dump-cache-only",
+        dataTimeText: entry.dataTimeText || "",
+      };
+    }
+    return null;
+  }
+
+  const entry = await cacheGet("dump:gzip");
+  if (!entry || Date.now() - entry.ts >= CACHE_TTL.dump) return null;
+  try {
+    const data = await decompressGzipBytes(entry.data);
+    return {
+      data,
+      ts: entry.ts,
+      fromCache: true,
+      source: "dump-cache-only",
+      dataTimeText: entry.dataTimeText || "",
+    };
+  } catch (e) {
+    console.warn("[cache-only] dump 解压失败:", e);
+    return null;
+  }
+}
+
 /** 拉取最新可用 gzip 包，返回 { data, gzip, url } */
 async function fetchFullDump() {
   for (let offset = 0; offset < 6; offset++) {
@@ -460,48 +632,76 @@ async function fetchFullDump() {
 }
 
 function applyFilters(data) {
-  const typeFilter = document.getElementById("filter-type").value;
-  const search = document.getElementById("search").value.trim().toUpperCase();
-  const dMin = parseFloat(document.getElementById("filter-d-min").value);
-  const dMax = parseFloat(document.getElementById("filter-d-max").value);
-  const tMin = parseFloat(document.getElementById("filter-t-min").value);
-  const tMax = parseFloat(document.getElementById("filter-t-max").value);
+  const typeFilter = $id("filter-type")?.value || "";
 
   return data.filter((c) => {
     if (typeFilter && String(c.geocacheType) !== typeFilter) return false;
-    if (search && !(c.code || "").toUpperCase().includes(search)) return false;
-    if (!Number.isNaN(dMin) && Number(c.difficulty) < dMin) return false;
-    if (!Number.isNaN(dMax) && Number(c.difficulty) > dMax) return false;
-    if (!Number.isNaN(tMin) && Number(c.terrain) < tMin) return false;
-    if (!Number.isNaN(tMax) && Number(c.terrain) > tMax) return false;
     if (typeof c.latitude !== "number" || typeof c.longitude !== "number") return false;
+    if (ONLY_CHINA_POINTS && !isInChinaApprox(c.latitude, c.longitude, CHINA_BORDER_BUFFER_KM)) return false;
     return true;
   });
 }
 
 function render(data) {
-  clusterGroup.clearLayers();
-  dotsLayer.clearLayers();
+  gcClusterGroup.clearLayers();
+  ocClusterGroup.clearLayers();
+  gcDotsLayer.clearLayers();
+  ocDotsLayer.clearLayers();
 
-  const filtered = applyFilters(data);
+  const gcFiltered = gcLayerVisible ? applyFilters(data) : [];
+  const ocFiltered = ocLayerVisible ? applyFilters(ocCaches) : [];
+
+  const sameSpotMap = new Map();
+  for (const c of gcFiltered) {
+    const k = coordKey(c);
+    if (!sameSpotMap.has(k)) sameSpotMap.set(k, []);
+    sameSpotMap.get(k).push(c);
+  }
+  const sameSpotMapOc = new Map();
+  for (const c of ocFiltered) {
+    const k = coordKey(c);
+    if (!sameSpotMapOc.has(k)) sameSpotMapOc.set(k, []);
+    sameSpotMapOc.get(k).push(c);
+  }
 
   if (viewMode === "cluster") {
-    if (!map.hasLayer(clusterGroup)) map.addLayer(clusterGroup);
-    if (map.hasLayer(dotsLayer)) map.removeLayer(dotsLayer);
+    if (gcLayerVisible && !map.hasLayer(gcClusterGroup)) map.addLayer(gcClusterGroup);
+    if (!gcLayerVisible && map.hasLayer(gcClusterGroup)) map.removeLayer(gcClusterGroup);
+    if (map.hasLayer(gcDotsLayer)) map.removeLayer(gcDotsLayer);
+    if (map.hasLayer(ocDotsLayer)) map.removeLayer(ocDotsLayer);
+    if (ocLayerVisible && !map.hasLayer(ocClusterGroup)) map.addLayer(ocClusterGroup);
+    if (!ocLayerVisible && map.hasLayer(ocClusterGroup)) map.removeLayer(ocClusterGroup);
 
-    const markers = filtered.map((c) => {
+    const markers = gcFiltered.map((c) => {
+      const sameSpot = sameSpotMap.get(coordKey(c)) || [c];
       const m = L.marker(projectToBasemap(c), { icon: makeIcon(c.geocacheType) });
-      m.bindPopup(() => makePopup(c));
+      m.bindPopup(() => makePopup(c, sameSpot));
       m.on("click", () => highlightInList(c.code));
       return m;
     });
-    clusterGroup.addLayers(markers);
-  } else {
-    if (map.hasLayer(clusterGroup)) map.removeLayer(clusterGroup);
-    if (!map.hasLayer(dotsLayer)) map.addLayer(dotsLayer);
+    gcClusterGroup.addLayers(markers);
 
-    for (const c of filtered) {
+    if (ocLayerVisible) {
+      const ocMarkers = ocFiltered.map((c) => {
+        const sameSpot = sameSpotMapOc.get(coordKey(c)) || [c];
+        const m = L.marker(projectToBasemap(c), { icon: makeOcIcon(c.geocacheType) });
+        m.bindPopup(() => makePopup(c, sameSpot));
+        m.on("click", () => highlightInList(c.code));
+        return m;
+      });
+      ocClusterGroup.addLayers(ocMarkers);
+    }
+  } else {
+    if (map.hasLayer(gcClusterGroup)) map.removeLayer(gcClusterGroup);
+    if (map.hasLayer(ocClusterGroup)) map.removeLayer(ocClusterGroup);
+    if (gcLayerVisible && !map.hasLayer(gcDotsLayer)) map.addLayer(gcDotsLayer);
+    if (!gcLayerVisible && map.hasLayer(gcDotsLayer)) map.removeLayer(gcDotsLayer);
+    if (ocLayerVisible && !map.hasLayer(ocDotsLayer)) map.addLayer(ocDotsLayer);
+    if (!ocLayerVisible && map.hasLayer(ocDotsLayer)) map.removeLayer(ocDotsLayer);
+
+    for (const c of gcFiltered) {
       const info = cacheTypeInfo(c.geocacheType);
+      const sameSpot = sameSpotMap.get(coordKey(c)) || [c];
       const dot = L.circle(projectToBasemap(c), {
         renderer: canvasRenderer,
         radius: DOT_RADIUS_METERS,
@@ -510,19 +710,50 @@ function render(data) {
         fillColor: info.color,
         fillOpacity: 0.9,
       });
-      dot.bindPopup(() => makePopup(c));
+      dot.bindPopup(() => makePopup(c, sameSpot));
       dot.on("click", () => highlightInList(c.code));
-      dotsLayer.addLayer(dot);
+      gcDotsLayer.addLayer(dot);
+    }
+
+    if (ocLayerVisible) {
+      for (const c of ocFiltered) {
+        const sameSpot = sameSpotMapOc.get(coordKey(c)) || [c];
+        const info = cacheTypeInfo(c.geocacheType);
+        const center = projectToBasemap(c);
+        const outer = L.circle(center, {
+          renderer: canvasRenderer,
+          radius: DOT_RADIUS_METERS * 1.02,
+          stroke: false,
+          fillColor: "#ff9800",
+          fillOpacity: 0.92,
+        });
+        const inner = L.circle(center, {
+          renderer: canvasRenderer,
+          radius: DOT_RADIUS_METERS * 0.78,
+          stroke: false,
+          fillColor: info.color,
+          fillOpacity: 0.95,
+        });
+        inner.bindPopup(() => makePopup(c, sameSpot));
+        inner.on("click", () => highlightInList(c.code));
+        ocDotsLayer.addLayer(outer);
+        ocDotsLayer.addLayer(inner);
+      }
     }
   }
 
-  document.getElementById("total").textContent = data.length.toLocaleString();
-  document.getElementById("visible").textContent = filtered.length.toLocaleString();
+  const mergedAll = [
+    ...(gcLayerVisible ? data : []),
+    ...(ocLayerVisible ? ocCaches : []),
+  ];
+  const mergedFiltered = [...gcFiltered, ...ocFiltered];
+  document.getElementById("total").textContent = mergedAll.length.toLocaleString();
+  document.getElementById("visible").textContent = mergedFiltered.length.toLocaleString();
 
-  renderList(filtered.slice(0, 200));
+  renderList(mergedFiltered.slice(0, 200));
 
-  if (filtered.length > 0 && filtered.length < data.length) {
-    const points = filtered.map(projectToBasemap);
+  if (mergedFiltered.length > 0 && mergedFiltered.length < mergedAll.length) {
+    const points = mergedFiltered.map(projectToBasemap);
     const lats = points.map(p => p[0]);
     const lngs = points.map(p => p[1]);
     map.fitBounds([
@@ -545,12 +776,15 @@ function renderList(items) {
 
   list.innerHTML = items.map((c) => {
     const info = cacheTypeInfo(c.geocacheType);
+    const sourceChip = c._source
+      ? `<span style="margin-left:6px;font-size:10px;padding:1px 6px;border-radius:999px;background:#ff980026;color:#ff9800;border:1px solid #ff980055;">OC</span>`
+      : "";
     return `
       <div class="cache-item" data-code="${c.code}" data-lat="${c.latitude}" data-lng="${c.longitude}">
         <div class="cache-item__avatar" style="background:${info.color}">${info.letter}</div>
         <div class="cache-item__body">
           <div class="cache-item__row1">
-            <span class="cache-item__code">${escapeHtml(c.code)}</span>
+            <span class="cache-item__code">${escapeHtml(c.code)}${sourceChip}</span>
             <span class="cache-item__date">${fmtDate(c.placedDate)}</span>
           </div>
           <div class="cache-item__name" title="${escapeHtml(c.name)}">${escapeHtml(c.name) || "(no name)"}</div>
@@ -593,10 +827,15 @@ function fmtAge(ms) {
 
 function updateCacheBadge() {
   const el = document.getElementById("cache-badge");
+  const dtEl = document.getElementById("data-time");
   if (!el) return;
   if (!lastCacheMeta) {
     el.textContent = "";
     el.title = "";
+    if (dtEl) {
+      dtEl.textContent = "";
+      dtEl.title = "";
+    }
     return;
   }
   const age = Date.now() - lastCacheMeta.ts;
@@ -605,6 +844,10 @@ function updateCacheBadge() {
   el.title = lastCacheMeta.fromCache
     ? `命中本地缓存 (${new Date(lastCacheMeta.ts).toLocaleTimeString()})\n点击「刷新」强制重新拉取`
     : `刚从网络拉取 (${new Date(lastCacheMeta.ts).toLocaleTimeString()})`;
+  if (dtEl) {
+    dtEl.textContent = lastDataTimeText ? `🕒 ${lastDataTimeText}` : "";
+    dtEl.title = lastDataTimeText ? `数据时间：${lastDataTimeText}` : "";
+  }
 }
 
 // 每秒刷新一下"几秒/分钟前"
@@ -618,19 +861,30 @@ setInterval(updateCacheBadge, 1000);
  */
 async function loadEndpoint(key, force) {
   if (key === "dump") {
-    // 后端代理模式: 直接拿 JSON, 服务端已经做过缓存了
+    // 后端代理模式: 手动缓存（保留 dataTimeText）
     if (BACKEND) {
-      return withCache(
-        "endpoint:dump-backend",
-        CACHE_TTL.dump,
-        async () => {
-          setLoading(true, "从后端拉取 dump...");
-          const r = await fetch(`${BACKEND}/api/tftc/dump`);
-          if (!r.ok) throw new Error(`后端 ${r.status}: ${r.statusText}`);
-          return r.json();
-        },
-        force
-      );
+      const CACHE_KEY = "endpoint:dump-backend";
+      if (!force) {
+        const entry = await cacheGet(CACHE_KEY);
+        if (entry && Date.now() - entry.ts < CACHE_TTL.dump) {
+          return {
+            data: entry.data,
+            ts: entry.ts,
+            fromCache: true,
+            dataTimeText: entry.dataTimeText || "",
+          };
+        }
+      }
+      setLoading(true, "从后端拉取 dump...");
+      const r = await fetch(`${BACKEND}/api/tftc/dump`);
+      if (!r.ok) throw new Error(`后端 ${r.status}: ${r.statusText}`);
+      const data = await r.json();
+      const ts = Date.now();
+      const dataTimeText =
+        parseDumpDataTimeFromUrl(r.headers.get("x-source-url")) ||
+        new Date(ts).toLocaleString("zh-CN", { hour12: false });
+      await cacheSet(CACHE_KEY, { ts, data, dataTimeText });
+      return { data, ts, fromCache: false, dataTimeText };
     }
     // 直连模式: 缓存 gzip 字节, 浏览器解压
     const CACHE_KEY = "dump:gzip";
@@ -642,23 +896,32 @@ async function loadEndpoint(key, force) {
           const data = await decompressGzipBytes(entry.data);
           const sizeKB = (entry.data.byteLength / 1024).toFixed(0);
           console.log(`[cache hit] dump  age=${Math.round((Date.now()-entry.ts)/1000)}s  gzip=${sizeKB}KB`);
-          return { data, ts: entry.ts, fromCache: true };
+          return { data, ts: entry.ts, fromCache: true, dataTimeText: entry.dataTimeText || "" };
         } catch (e) {
           console.warn("[cache] decompression failed, falling back to network:", e);
         }
       }
     }
-    const { data, gzip } = await fetchFullDump();
+    const { data, gzip, url } = await fetchFullDump();
     const ts = Date.now();
-    await cacheSet(CACHE_KEY, { ts, data: gzip });
-    return { data, ts, fromCache: false };
+    const dataTimeText = parseDumpDataTimeFromUrl(url) || new Date(ts).toLocaleString("zh-CN", { hour12: false });
+    await cacheSet(CACHE_KEY, { ts, data: gzip, dataTimeText });
+    return { data, ts, fromCache: false, dataTimeText };
   }
-  // 非 dump 端点：优先由 dump 派生，避免每次都请求 TFTC 各子端点
+  // 非 dump 端点：仅在本地已有 dump 缓存时才派生，避免首屏自动拉全量
   if (PREFER_DERIVED_FROM_DUMP) {
     try {
-      const dumpResult = await loadEndpoint("dump", force);
-      const derived = deriveFromDump(dumpResult.data, key);
-      return { data: derived, ts: dumpResult.ts, fromCache: dumpResult.fromCache, source: "derived" };
+      const dumpResult = await getFreshDumpFromLocalCacheOnly();
+      if (dumpResult) {
+        const derived = deriveFromDump(dumpResult.data, key);
+        return {
+          data: derived,
+          ts: dumpResult.ts,
+          fromCache: dumpResult.fromCache,
+          source: "derived",
+          dataTimeText: dumpResult.dataTimeText || "",
+        };
+      }
     } catch (e) {
       console.warn(`[derive] ${key} 派生失败，回退网络端点:`, e);
     }
@@ -669,15 +932,18 @@ async function loadEndpoint(key, force) {
 }
 
 async function load(force = false) {
-  const key = document.getElementById("endpoint").value;
-  const btn = document.getElementById("btn-load");
-  btn.disabled = true;
+  const key = $id("endpoint")?.value || "by-published";
+  const btn = $id("btn-load");
+  if (btn) btn.disabled = true;
   setLoading(true, force ? "强制刷新中..." : "加载中...");
 
   try {
     const result = await loadEndpoint(key, force);
     allCaches = result.data;
     lastCacheMeta = { key, ts: result.ts, fromCache: result.fromCache };
+    lastDataTimeText =
+      result.dataTimeText ||
+      (result.ts ? new Date(result.ts).toLocaleString("zh-CN", { hour12: false }) : "");
     updateCacheBadge();
     render(allCaches);
 
@@ -698,8 +964,72 @@ async function load(force = false) {
     showSnackbar(`加载失败：${e.message}`, { type: "error", duration: 6000 });
     console.error(e);
   } finally {
-    btn.disabled = false;
+    if (btn) btn.disabled = false;
     setLoading(false);
+  }
+}
+
+async function loadOcFullSingle(site, force = false) {
+  if (!BACKEND) {
+    showSnackbar("OC 图层需要后端模式（请通过 server.py 打开页面）", { type: "error", duration: 3800 });
+    return { site, data: [], fromCache: false };
+  }
+  const key = `oc:full:${OC_CACHE_VERSION}:${site}`;
+  const result = await withCache(
+    key,
+    OC_CACHE_TTL,
+    async () => {
+      const r = await fetch(`${BACKEND}/api/oc/full?site=${encodeURIComponent(site)}`);
+      if (!r.ok) {
+        let detail = r.statusText || "Unknown Error";
+        try {
+          const payload = await r.json();
+          if (payload?.detail) detail = payload.detail;
+        } catch (_) {
+          try { detail = await r.text(); } catch (_) {}
+        }
+        throw new Error(`OC ${r.status}: ${detail}`);
+      }
+      return r.json();
+    },
+    force
+  );
+  return { site, data: Array.isArray(result.data) ? result.data : [], fromCache: !!result.fromCache };
+}
+
+async function loadOcFull(force = false) {
+  const jobs = OC_SITES_ENABLED.map((site) =>
+    loadOcFullSingle(site, force)
+      .then((res) => ({ ok: true, ...res }))
+      .catch((err) => ({ ok: false, site, err }))
+  );
+  const settled = await Promise.all(jobs);
+
+  const ok = settled.filter((x) => x.ok);
+  const failed = settled.filter((x) => !x.ok);
+  const merged = [];
+  const seen = new Set();
+  for (const item of ok) {
+    for (const c of item.data) {
+      const k = `${c._source || item.site}:${c.code || ""}`;
+      if (seen.has(k)) continue;
+      seen.add(k);
+      merged.push(c);
+    }
+  }
+  ocCaches = merged;
+  if (allCaches.length) render(allCaches);
+
+  const parts = ok.map((x) => `${x.site}:${x.data.length}`);
+  if (ok.length) {
+    showSnackbar(
+      `${force ? "刷新" : "加载"} OC 完成（${parts.join(" / ")}）`,
+      { type: "info", duration: 2800 }
+    );
+  }
+  if (failed.length) {
+    const names = failed.map((x) => x.site).join(", ");
+    showSnackbar(`OC 部分站点加载失败：${names}`, { type: "error", duration: 4200 });
   }
 }
 
@@ -755,53 +1085,78 @@ document.addEventListener("DOMContentLoaded", () => {
     if (sel) sel.value = "carto_light";
   }
 
-  // 后端模式标识
-  if (BACKEND) {
-    const badge = document.querySelector(".app-bar__brand .badge");
-    if (badge) {
-      badge.textContent = "BACKEND";
-      badge.style.background = "var(--md-tertiary)";
-      badge.style.color = "var(--md-on-tertiary)";
-      badge.title = `代理: ${BACKEND}`;
-    }
-  }
-
   initMap();
 
   // 端点切换 → 自动加载（用缓存）
-  document.getElementById("endpoint").addEventListener("change", () => load(false));
+  on("endpoint", "change", () => load(false));
 
   // 视图模式切换 → 仅重渲染（数据不变）
-  document.getElementById("view-mode").addEventListener("change", (e) => {
+  on("view-mode", "change", (e) => {
     viewMode = e.target.value;
     if (allCaches.length) render(allCaches);
   });
 
   // 底图切换 → 换 tile, 必要时重投影 marker
-  document.getElementById("basemap").addEventListener("change", (e) => {
+  on("basemap", "change", (e) => {
     setBasemap(e.target.value);
   });
 
-  // 类型 / D/T / 搜索筛选 → 仅重渲染
-  document.getElementById("filter-type").addEventListener("change", () => render(allCaches));
-  document.getElementById("filter-d-min").addEventListener("change", () => render(allCaches));
-  document.getElementById("filter-d-max").addEventListener("change", () => render(allCaches));
-  document.getElementById("filter-t-min").addEventListener("change", () => render(allCaches));
-  document.getElementById("filter-t-max").addEventListener("change", () => render(allCaches));
-  document.getElementById("search").addEventListener("input", () => {
-    if (allCaches.length) render(allCaches);
-  });
+  // 类型筛选 → 仅重渲染
+  on("filter-type", "change", () => render(allCaches));
 
   // 「刷新」按钮 → 强制跳缓存
-  document.getElementById("btn-load").addEventListener("click", () => load(true));
+  on("btn-load", "click", () => load(true));
 
   // 「导出」按钮
-  document.getElementById("btn-export").addEventListener("click", exportJson);
+  on("btn-export", "click", exportJson);
 
   // 「主题切换」按钮
-  document.getElementById("btn-theme").addEventListener("click", () => {
+  on("btn-theme", "click", () => {
     applyTheme(getCurrentTheme() === "light" ? "dark" : "light");
   });
+
+  // 「OC 图层」开关（当前仅前端独立层，等待你接入真实 OCAPI 数据）
+  const ocBtn = document.getElementById("btn-oc-layer");
+  if (ocBtn) {
+    ocBtn.addEventListener("click", async () => {
+      ocLayerVisible = !ocLayerVisible;
+      ocBtn.classList.toggle("is-active", ocLayerVisible);
+      if (ocLayerVisible && !ocCaches.length) {
+        try {
+          await loadOcFull(false);
+        } catch (e) {
+          showSnackbar(`OC 加载失败：${e.message}`, { type: "error", duration: 4200 });
+          ocLayerVisible = false;
+          ocBtn.classList.remove("is-active");
+        }
+      }
+      if (allCaches.length) render(allCaches);
+    });
+  }
+
+  // 「仅显示 OC」模式
+  const ocOnlyBtn = document.getElementById("btn-oc-only");
+  if (ocOnlyBtn) {
+    ocOnlyBtn.addEventListener("click", async () => {
+      ocOnlyMode = !ocOnlyMode;
+      gcLayerVisible = !ocOnlyMode;
+      if (ocOnlyMode) {
+        ocLayerVisible = true;
+        if (!ocCaches.length) {
+          try { await loadOcFull(false); } catch (e) {
+            showSnackbar(`OC 加载失败：${e.message}`, { type: "error", duration: 4200 });
+            ocOnlyMode = false;
+            gcLayerVisible = true;
+            ocLayerVisible = false;
+          }
+        }
+      }
+      ocOnlyBtn.classList.toggle("is-active", ocOnlyMode);
+      if (ocBtn) ocBtn.classList.toggle("is-active", ocLayerVisible);
+      if (allCaches.length) render(allCaches);
+      showSnackbar(ocOnlyMode ? "已切换为仅显示 OC" : "已退出仅显示 OC", { type: "info", duration: 1800 });
+    });
+  }
 
   // 「清缓存」按钮
   const clearBtn = document.getElementById("btn-clear-cache");
@@ -809,6 +1164,7 @@ document.addEventListener("DOMContentLoaded", () => {
     clearBtn.addEventListener("click", async () => {
       await cacheClear();
       lastCacheMeta = null;
+      lastDataTimeText = "";
       updateCacheBadge();
       showSnackbar("本地缓存已清空", { type: "success" });
     });
